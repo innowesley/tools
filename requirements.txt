@@ -1,0 +1,5 @@
+-e ./docstructure
+-e ./docstructure
+-e ./acewriter
+-e ./doctools
+-e ./transcribe
