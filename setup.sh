@@ -42,7 +42,7 @@ echo "=== 4. Install/update deps ==="
 py -m pip install --config-settings editable_mode=compat -r requirements.txt
 
 echo "=== 5. Fix .pth for flat-layout packages ==="
-SITE_PKGS=".venv/lib/python*/site-packages"
+SITE_PKGS=$(echo .venv/lib/python*/site-packages)
 for f in "$SITE_PKGS"/__editable__.*.pth; do
     rm -f "$f"
 done
