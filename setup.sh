@@ -38,17 +38,22 @@ for dir in "${REPOS[@]}" .venv; do
     fi
 done
 
-echo "=== 4. Install/update deps ==="
-py -m pip install --config-settings editable_mode=compat -r requirements.txt
+echo "=== 4. Create venv if missing ==="
+if [ ! -f .venv/bin/python ]; then
+    python3 -m venv .venv
+fi
 
-echo "=== 5. Fix .pth for flat-layout packages ==="
+echo "=== 5. Install/update deps ==="
+.venv/bin/python -m pip install --config-settings editable_mode=compat -r requirements.txt
+
+echo "=== 6. Fix .pth for flat-layout packages ==="
 SITE_PKGS=$(echo .venv/lib/python*/site-packages)
 for f in "$SITE_PKGS"/__editable__.*.pth; do
     rm -f "$f"
 done
 echo "$(pwd)" > "$SITE_PKGS/tools.pth"
 
-echo "=== 6. Symlink tools to ~/.local/bin ==="
+echo "=== 7. Symlink tools to ~/.local/bin ==="
 TARGET="${HOME}/.local/bin"
 mkdir -p "$TARGET"
 for tool in "${REPOS[@]}"; do
