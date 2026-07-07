@@ -143,5 +143,18 @@ for tool in "${REPOS[@]}"; do
     fi
 done
 
+header "9. Ensure ~/.local/bin is in PATH"
+if ! grep -qs 'HOME/.local/bin' ~/.bashrc; then
+    cat >> ~/.bashrc << 'EOF'
+
+# Added by tools/setup.sh
+export PATH="$HOME/.local/bin:$PATH"
+EOF
+    summary "Added ~/.local/bin to PATH in ~/.bashrc"
+    info "Run 'source ~/.bashrc' or open new terminal to use tools"
+else
+    summary "${HOME}/.local/bin already configured in ~/.bashrc"
+fi
+
 figlet_header "Done"
 info "Run from anywhere: ${REPOS[*]}"
