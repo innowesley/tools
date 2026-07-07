@@ -135,14 +135,6 @@ if [ -n "$VENV_AVAIL" ] && [ "$VENV_AVAIL" -lt 5000000 ]; then  # < 5G
     echo "       ./setup.sh"
     echo ""
     exit 1
-elif [ -n "$VENV_AVAIL" ] && [ "$VENV_AVAIL" -lt 10000000 ]; then  # < 10G
-    warn "The filesystem '${VENV_FS}' has only $(( VENV_AVAIL / 1024 / 1024 ))G free."
-    warn "pip may use 3-5G+ for torch/CUDA packages. If installation fails, run:"
-    echo ""
-    echo "    rm -rf ~/.cache/pip"
-    echo "    export TMPDIR=/var/tmp"
-    echo "    ./setup.sh"
-    echo ""
 fi
 
 # ── Check /tmp has enough space for pip build temp ──
