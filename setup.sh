@@ -113,31 +113,7 @@ fi
 
 header "5. Install/update deps"
 
-# ── Check venv filesystem has enough space for pip installs ──
-VENV_FS=$(df --output=target .venv 2>/dev/null | tail -1)
-VENV_AVAIL=$(df --output=avail .venv 2>/dev/null | tail -1)
-if [ -n "$VENV_AVAIL" ] && [ "$VENV_AVAIL" -lt 5000000 ]; then  # < 5G
-    echo ""
-    warn "The filesystem '${VENV_FS}' has only $(( VENV_AVAIL / 1024 / 1024 ))G free."
-    warn "pip needs space to download, build, and install large packages (torch, CUDA, etc.)."
-    warn ""
-    warn "To fix:"
-    warn "  1. Clean old pip cache:  rm -rf ~/.cache/pip"
-    warn "  2. Set TMPDIR to a larger filesystem:"
-    echo ""
-    echo "       export TMPDIR=/var/tmp"
-    echo "       ./setup.sh"
-    echo ""
-    warn "  Or recreate the venv on a larger filesystem:"
-    echo ""
-    echo "       rm -rf .venv"
-    echo "       export TMPDIR=/var/tmp"
-    echo "       ./setup.sh"
-    echo ""
-    exit 1
-fi
-
-# ── Check /tmp has enough space for pip build temp ──
+# ── Check if /tmp has enough space for pip ──
 TMP_AVAIL=$(df --output=avail /tmp 2>/dev/null | tail -1)
 if [ -n "$TMP_AVAIL" ] && [ "$TMP_AVAIL" -lt 3000000 ]; then  # < 3G
     if [ -n "${TMPDIR:-}" ]; then
@@ -156,13 +132,6 @@ if [ -n "$TMP_AVAIL" ] && [ "$TMP_AVAIL" -lt 3000000 ]; then  # < 3G
         echo ""
         exit 1
     fi
-fi
-
-# ── Check pip cache filesystem isn't also tight ──
-CACHE_AVAIL=$(df --output=avail ~/.cache/pip 2>/dev/null | tail -1)
-if [ -n "$CACHE_AVAIL" ] && [ "$CACHE_AVAIL" -lt 3000000 ]; then
-    warn "pip cache (~/.cache/pip) is also on a tight filesystem"
-    warn "Recommend: rm -rf ~/.cache/pip"
 fi
 
 run_step "Installing packages" \
