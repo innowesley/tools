@@ -112,6 +112,28 @@ else
 fi
 
 header "5. Install/update deps"
+
+# ── Check if /tmp has enough space for pip ──
+TMP_AVAIL=$(df --output=avail /tmp 2>/dev/null | tail -1)
+if [ -n "$TMP_AVAIL" ] && [ "$TMP_AVAIL" -lt 3000000 ]; then  # < 3G
+    if [ -n "${TMPDIR:-}" ]; then
+        export PIP_CACHE_DIR="$TMPDIR/.pip-cache"
+        mkdir -p "$PIP_CACHE_DIR"
+        info "Using TMPDIR=$TMPDIR for pip temp and cache"
+    else
+        echo ""
+        warn "/tmp has only $(( TMP_AVAIL / 1024 / 1024 ))G free — pip needs >3G"
+        warn "Clean old pip cache and point TMPDIR to a larger filesystem:"
+        echo ""
+        echo "    rm -rf ~/.cache/pip"
+        echo "    mkdir -p ~/tmp"
+        echo "    export TMPDIR=~/tmp"
+        echo "    ./setup.sh"
+        echo ""
+        exit 1
+    fi
+fi
+
 run_step "Installing packages" \
     .venv/bin/python -m pip install \
     --config-settings editable_mode=compat \
