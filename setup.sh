@@ -17,6 +17,7 @@ if [[ -d ~/scripts/lib ]]; then
 else
     BOLD=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""; GRAY=""; NC=""
     info()    { echo "  $*"; }
+    warn()    { echo "  [WARN] $*" >&2; }
     run_with_spinner() { local m="$1" t0=$SECONDS; shift; echo "  $m"; "$@"; local rc=$?; local e=$((SECONDS-t0)); echo "  ${GRAY}(${e}s)${NC}"; return $rc; }
 fi
 
@@ -32,6 +33,15 @@ _epoch_ms() {
 _fmt_ms() {
     local e=$1
     printf "%d.%1ds" $(( e / 1000 )) $(( e % 1000 / 100 ))
+}
+
+# ── Find the real filesystem with the most free space ──
+_pick_best_mount() {
+    df -B1 --output=target,avail,fstype 2>/dev/null \
+        | grep -E '\s+(ext4|xfs|btrfs|zfs)$' \
+        | sort -k2 -rn \
+        | head -1 \
+        | awk '{print $1}'
 }
 
 run_step() {
@@ -112,6 +122,26 @@ else
 fi
 
 header "5. Install/update deps"
+
+# ── Pre-flight: relocate pip cache/temp if /home is tight ──
+AVAIL_HOME=$(df --output=avail /home 2>/dev/null | tail -1)
+if [ -n "$AVAIL_HOME" ] && [ "$AVAIL_HOME" -lt 5000000 ]; then  # < 5G
+    BEST=$(_pick_best_mount)
+    if [ -n "$BEST" ]; then
+        PIP_ROOT="$BEST/.cache/pip-tools"
+        mkdir -p "$PIP_ROOT/cache"
+        BUILD_DIR=$(mktemp -d "$PIP_ROOT/build.XXXXXX" 2>/dev/null)
+        export PIP_CACHE_DIR="$PIP_ROOT/cache"
+        export TMPDIR="${BUILD_DIR:-$PIP_ROOT/build.$$}"
+        trap 'rm -rf "$TMPDIR"' EXIT
+        info "Low space on /home ($(( AVAIL_HOME / 1024 / 1024 ))G free)"
+        FREE=$(df -h "$BEST" | tail -1 | awk '{print $4}')
+        info "Redirecting pip to ${BEST} (${FREE} free)"
+    else
+        warn "Low space on /home but no suitable filesystem for relocation"
+    fi
+fi
+
 run_step "Installing packages" \
     .venv/bin/python -m pip install \
     --config-settings editable_mode=compat \
