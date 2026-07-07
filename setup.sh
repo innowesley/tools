@@ -43,7 +43,7 @@ run_step() {
         "$@" || rc=$?
         local now=$(_epoch_ms)
         echo "  ${GRAY}($(_fmt_ms $(( now - t0 ))))${NC}"
-        return $rc
+        return 0
     else
         run_with_spinner "$msg" "$@" || true
     fi
