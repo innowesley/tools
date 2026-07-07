@@ -128,15 +128,23 @@ AVAIL_HOME=$(df --output=avail /home 2>/dev/null | tail -1)
 if [ -n "$AVAIL_HOME" ] && [ "$AVAIL_HOME" -lt 5000000 ]; then  # < 5G
     BEST=$(_pick_best_mount)
     if [ -n "$BEST" ]; then
-        PIP_ROOT="$BEST/.cache/pip-tools"
-        mkdir -p "$PIP_ROOT/cache"
-        BUILD_DIR=$(mktemp -d "$PIP_ROOT/build.XXXXXX" 2>/dev/null)
-        export PIP_CACHE_DIR="$PIP_ROOT/cache"
-        export TMPDIR="${BUILD_DIR:-$PIP_ROOT/build.$$}"
-        trap 'rm -rf "$TMPDIR"' EXIT
-        info "Low space on /home ($(( AVAIL_HOME / 1024 / 1024 ))G free)"
-        FREE=$(df -h "$BEST" | tail -1 | awk '{print $4}')
-        info "Redirecting pip to ${BEST} (${FREE} free)"
+        if [ "$BEST" = "/" ]; then
+            PIP_ROOT="/var/tmp/pip-tools"
+        else
+            PIP_ROOT="$BEST/.cache/pip-tools"
+        fi
+        if ! mkdir -p "$PIP_ROOT/cache" 2>/dev/null; then
+            warn "Cannot create $PIP_ROOT — skipping relocation"
+            unset BEST
+        else
+            BUILD_DIR=$(mktemp -d "$PIP_ROOT/build.XXXXXX" 2>/dev/null)
+            export PIP_CACHE_DIR="$PIP_ROOT/cache"
+            export TMPDIR="${BUILD_DIR:-$PIP_ROOT/build.$$}"
+            trap 'rm -rf "$TMPDIR"' EXIT
+            info "Low space on /home ($(( AVAIL_HOME / 1024 / 1024 ))G free)"
+            FREE=$(df -h "$BEST" | tail -1 | awk '{print $4}')
+            info "Redirecting pip to ${BEST} (${FREE} free)"
+        fi
     else
         warn "Low space on /home but no suitable filesystem for relocation"
     fi
