@@ -24,6 +24,7 @@ fi
 header()  { printf "\n${BOLD}${BLUE}━━━ %s ━━━${NC}\n" "$*"; }
 summary() { printf "  ${BOLD}${GREEN}✓${NC}  ${BOLD}%s${NC}\n" "$*"; }
 
+
 _epoch_ms() {
     local t="${EPOCHREALTIME}"
     echo $(( ${t%.*} * 1000 + 10#${t#*.} / 1000 ))
@@ -78,6 +79,7 @@ if git rev-parse --git-dir 2>/dev/null; then
 else
     info "Not a git repo, skipping"
 fi
+
 
 header "2. Clone/pull tool repos"
 for repo in "${REPOS[@]}"; do

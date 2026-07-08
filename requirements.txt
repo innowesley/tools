@@ -1,3 +1,4 @@
+-e ./transcribe
 -e ./acewriter[browser]
 -e ./doctools
--e ./transcribe
+
