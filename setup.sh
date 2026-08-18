@@ -72,10 +72,15 @@ done < repos.conf
 
 header "1. Git pull tools/"
 if git rev-parse --git-dir 2>/dev/null; then
+    STASH_MSG="setup.sh-$(date +%Y%m%d%H%M%S)"
     run_step "Stashing local changes" \
-        git stash push -m "setup.sh $(date +%H:%M)" 2>/dev/null
+        git stash push --include-untracked -m "$STASH_MSG" 2>/dev/null
     run_step "Pulling tools/" git pull --rebase
-    git stash list 2>/dev/null | grep -q . && run_step "Restoring stash" bash -c 'git stash pop 2>/dev/null'
+    if git stash list --format="%gs" 2>/dev/null | grep -q "$STASH_MSG"; then
+        if ! run_step "Restoring stash" git stash pop 2>/dev/null; then
+            echo "  ${YELLOW}⚠ Stash pop had conflicts — run 'git stash list' to check${NC}"
+        fi
+    fi
 else
     info "Not a git repo, skipping"
 fi
@@ -84,14 +89,19 @@ fi
 header "2. Clone/pull tool repos"
 for repo in "${REPOS[@]}"; do
     if [ -d "$repo/.git" ]; then
+        STASH_MSG="setup.sh-$(date +%Y%m%d%H%M%S)"
         run_step "Stashing $repo" \
-            git -C "$repo" stash push --include-untracked -m "setup.sh $(date +%H:%M)" 2>/dev/null
+            git -C "$repo" stash push --include-untracked -m "$STASH_MSG" 2>/dev/null
         if git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name @{u} &>/dev/null; then
             run_step "Pulling $repo" git -C "$repo" pull --rebase
         else
             $VERBOSE && info "$repo: no upstream, skipping pull"
         fi
-        git -C "$repo" stash list 2>/dev/null | grep -q . && run_step "Restoring $repo stash" bash -c "git -C '$repo' stash pop 2>/dev/null"
+        if git -C "$repo" stash list --format="%gs" 2>/dev/null | grep -q "$STASH_MSG"; then
+            if ! run_step "Restoring $repo stash" bash -c "git -C '$repo' stash pop 2>/dev/null"; then
+                echo "  ${YELLOW}⚠ $repo stash pop had conflicts — run 'git -C $repo stash list' to check${NC}"
+            fi
+        fi
     else
         run_step "Cloning $repo" git clone "git@github.com:innowesley/$repo.git"
         (cd "$repo" && git branch --set-upstream-to=origin/main main)
