@@ -41,7 +41,7 @@ routing, turnitin chunking (serialized/paced), scoring mislabel fix.
   launches ~20s headless browser on premium blocks that refresh can't fix.
 - `zerogpt.py`: cookie + no-cookie paths only accept `success:true`; paywall 403 → generic
   "all methods failed".
-- `proxy.py` `ProxyPool`: loads `proxyrun --json` proxies; used by youscan + humanizeai
+- `proxy.py` `ProxyPool`: loads `proxman --json` proxies; used by youscan + humanizeai
   chunks. turnitin does not use it.
 - Auth: `CookieProvider` + per-service SQLite cookie cache; `history.jsonl` log exists.
 
@@ -111,7 +111,7 @@ routing, turnitin chunking (serialized/paced), scoring mislabel fix.
 - RateGate in-memory singleton must be thread-safe (concurrent 5-detector runs already
   parallelize); use a lock around acquire/set.
 - Cross-run gate state in SQLite adds cache writes per detector call — negligible volume.
-- Proxy dependency: if `proxyrun`/proxies unavailable, fall back to direct curl_cffi
+- Proxy dependency: if `proxman`/proxies unavailable, fall back to direct curl_cffi
   (same as youscan's behavior) so turnitin still works without proxies.
 
 ## Backward Compatibility
