@@ -5,15 +5,18 @@ set -euo pipefail
 VERBOSE=false
 FORCE_BROWSERS=false
 NO_PULL=false
+SERIAL=false
 for arg in "$@"; do
     case "$arg" in
         -v|--verbose) VERBOSE=true ;;
         --force-browsers) FORCE_BROWSERS=true ;;
         --no-pull) NO_PULL=true ;;
+        --serial) SERIAL=true ;;
         -h|--help)
-            echo "Usage: setup.sh [-v|--verbose] [--force-browsers] [--no-pull]"
+            echo "Usage: setup.sh [-v|--verbose] [--force-browsers] [--no-pull] [--serial]"
             echo "  --force-browsers  re-download Playwright Chromium + Camoufox even if present"
             echo "  --no-pull         skip all git stash/pull (install only)"
+            echo "  --serial          pull repos one by one (default: in parallel)"
             exit 0 ;;
     esac
 done
@@ -36,8 +39,15 @@ summary() { printf "  ${BOLD}${GREEN}✓${NC}  ${BOLD}%s${NC}\n" "$*"; }
 skip_msg() { printf "  ${GRAY}↷ %s${NC}\n" "$*"; }
 
 # Collect-and-report: keep going, list fixes at the end.
+# FAIL_FILE (when set) also persists failures from background jobs, which
+# can't modify the parent's FAILURES array across the process boundary.
 FAILURES=()
-record_failure() { FAILURES+=("$1 :: fix: $2"); }
+record_failure() {
+    FAILURES+=("$1 :: fix: $2")
+    if [[ -n "${FAIL_FILE:-}" ]]; then
+        printf '%s :: fix: %s\n' "$1" "$2" >> "$FAIL_FILE"
+    fi
+}
 print_failures() {
     if ((${#FAILURES[@]} == 0)); then return 0; fi
     printf "\n${BOLD}${YELLOW}━━━ Action needed (%d) ━━━${NC}\n" "${#FAILURES[@]}"
@@ -87,12 +97,29 @@ figlet_header() {
 }
 
 _net_ok() {
-    # Fast upstream reachability probe (10s). Used before any pull/fetch.
-    git ls-remote https://github.com 2>/dev/null | head -1 | grep -q . 2>/dev/null
+    # Upstream reachability probe (10s cap). Probes the repo's own origin
+    # so the URL is always valid — probing bare https://github.com always
+    # fails (not a repo) and falsely reports offline.
+    local dir="${1:-.}" url
+    url="$(git -C "$dir" config --get remote.origin.url 2>/dev/null)"
+    [[ -z "$url" ]] && url="https://github.com/innowesley/tools.git"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 10 git ls-remote "$url" HEAD >/dev/null 2>&1
+    else
+        git ls-remote "$url" HEAD >/dev/null 2>&1
+    fi
 }
 
 _git_dirty() { [[ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]]; }
 _has_upstream() { git -C "$1" rev-parse --abbrev-ref --symbolic-full-name @{u} &>/dev/null; }
+
+# Shared connectivity result — probed ONCE at startup (0.9s each; the old
+# code re-probed per repo, up to ~7s wasted per run). safe_pull and the
+# browser steps read $NET_OK instead of probing again.
+NET_OK=false
+probe_network_once() {
+    if _net_ok "."; then NET_OK=true; else NET_OK=false; fi
+}
 
 # safe_pull <dir> — stash only if dirty, pull only with upstream+network,
 # restore stash, never drop a conflicting stash.
@@ -108,7 +135,7 @@ safe_pull() {
         fi
     fi
     if _has_upstream "$dir"; then
-        if _net_ok; then
+        if $NET_OK; then
             if ! git -C "$dir" pull --rebase 2>/dev/null; then
                 record_failure "Pull $label" "run 'git -C $label pull --rebase' with -v to see why"
             fi
@@ -139,6 +166,10 @@ while IFS= read -r line; do
     REPOS+=("$line")
 done < repos.conf
 
+# One shared probe — safe_pull/clone/browser steps reuse $NET_OK.
+probe_network_once
+if ! $NET_OK; then info "offline: git pulls and browser downloads will be skipped"; fi
+
 if ! $NO_PULL; then
 header "1. Git pull tools/"
 if git rev-parse --git-dir >/dev/null 2>&1; then
@@ -148,26 +179,54 @@ else
 fi
 
 header "2. Clone/pull tool repos"
+_missing=()
+_present=()
 for repo in "${REPOS[@]}"; do
-    if [ -d "$repo/.git" ]; then
-        safe_pull "$repo" "$repo"
-    else
-        if _net_ok; then
-            if ! git clone "git@github.com:innowesley/$repo.git" 2>/dev/null; then
-                info "$repo: SSH clone failed, trying HTTPS"
-                if git clone "https://github.com/innowesley/$repo.git" 2>/dev/null; then
-                    (cd "$repo" && git branch --set-upstream-to=origin/main main 2>/dev/null) || true
-                else
-                    record_failure "Clone $repo" "check SSH key or network, then clone manually"
-                fi
-            else
+    if [ -d "$repo/.git" ]; then _present+=("$repo"); else _missing+=("$repo"); fi
+done
+# Clones are rare — keep them sequential (branch setup is order-sensitive).
+if ((${#_missing[@]} > 0)); then
+for repo in "${_missing[@]}"; do
+    if $NET_OK; then
+        if ! git clone "git@github.com:innowesley/$repo.git" 2>/dev/null; then
+            info "$repo: SSH clone failed, trying HTTPS"
+            if git clone "https://github.com/innowesley/$repo.git" 2>/dev/null; then
                 (cd "$repo" && git branch --set-upstream-to=origin/main main 2>/dev/null) || true
+            else
+                record_failure "Clone $repo" "check SSH key or network, then clone manually"
             fi
         else
-            record_failure "Clone $repo (missing dir, offline)" "reconnect, then rerun setup.sh"
+            (cd "$repo" && git branch --set-upstream-to=origin/main main 2>/dev/null) || true
         fi
+    else
+        record_failure "Clone $repo (missing dir, offline)" "reconnect, then rerun setup.sh"
     fi
 done
+fi
+if ((${#_present[@]} > 0)); then
+    if $SERIAL || $VERBOSE; then
+        # --serial (or -v, where interleaved output would be unreadable).
+        for repo in "${_present[@]}"; do safe_pull "$repo" "$repo"; done
+    else
+        # Parallel pulls: each repo is an independent working tree, so this
+        # is safe. Output is captured per repo and replayed in repos.conf
+        # order to stay readable; failures cross via FAIL_FILE (subshells
+        # can't touch the parent's FAILURES array).
+        _tmp="$(mktemp -d)"
+        for repo in "${_present[@]}"; do
+            ( FAIL_FILE="$_tmp/fail.$repo" \
+              safe_pull "$repo" "$repo" >"$_tmp/log.$repo" 2>&1 ) &
+        done
+        wait || true
+        for repo in "${_present[@]}"; do
+            cat "$_tmp/log.$repo" 2>/dev/null || true
+            if [ -s "$_tmp/fail.$repo" ]; then
+                while IFS= read -r line; do FAILURES+=("$line"); done < "$_tmp/fail.$repo" || true
+            fi
+        done
+        rm -rf "$_tmp"
+    fi
+fi
 else
     skip_msg "Git pull skipped (--no-pull)"
 fi
@@ -189,13 +248,36 @@ fi
 
 header "5. Install/update deps"
 if [ -f .venv/bin/python ]; then
-    run_step "Installing packages" true \
-        .venv/bin/python -m pip install \
-        --config-settings editable_mode=compat \
-        -r requirements.txt
-    # Verify the imports setup.sh depends on later.
-    if ! .venv/bin/python -c "import acewriter" 2>/dev/null; then
-        record_failure "import acewriter failed after pip install" "run '.venv/bin/python -m pip install -r requirements.txt -v'"
+    # Skip the 15s+ reinstall when inputs are unchanged: editable installs
+    # never need re-running for code edits, only for dep/metadata changes.
+    # Marker covers requirements + each editable's build metadata; the
+    # import + entry-point probes catch anything the hash misses.
+    # NOTE: only existing files are hashed, and the pipeline ends with
+    # `|| true` — under `set -euo pipefail` a nonzero sha256sum (missing
+    # file) would otherwise kill the script at this assignment.
+    _req_files=(requirements.txt)
+    for _d in acewriter doctools docstructure transcribe; do
+        for _m in pyproject.toml setup.py setup.cfg; do
+            [[ -f "$_d/$_m" ]] && _req_files+=("$_d/$_m")
+        done
+    done
+    _req_hash="$(sha256sum "${_req_files[@]}" 2>/dev/null | sha256sum | cut -d' ' -f1 || true)"
+    _n_fail_before="${#FAILURES[@]}"
+    if [[ -f .venv/.setup-req.hash ]] && [[ "$(cat .venv/.setup-req.hash 2>/dev/null)" == "$_req_hash" ]] \
+        && .venv/bin/python -c "import acewriter" 2>/dev/null \
+        && [ -x .venv/bin/camoufox ] && [ -x .venv/bin/acewriter ]; then
+        summary "deps already installed (no changes)"
+    else
+        run_step "Installing packages" true \
+            .venv/bin/python -m pip install \
+            --config-settings editable_mode=compat \
+            -r requirements.txt
+        # Verify the imports setup.sh depends on later.
+        if ! .venv/bin/python -c "import acewriter" 2>/dev/null; then
+            record_failure "import acewriter failed after pip install" "run '.venv/bin/python -m pip install -r requirements.txt -v'"
+        elif ((${#FAILURES[@]} == _n_fail_before)); then
+            echo "$_req_hash" > .venv/.setup-req.hash
+        fi
     fi
 else
     record_failure ".venv/bin/python missing" "run 'python3 -m venv .venv' manually"
@@ -204,7 +286,7 @@ fi
 header "6. Browsers (skip if present)"
 if .venv/bin/python -c "import playwright" 2>/dev/null; then
     if $FORCE_BROWSERS || ! ls -d ~/.cache/ms-playwright/chromium-* >/dev/null 2>&1; then
-        if _net_ok; then
+        if $NET_OK; then
             run_step "Playwright Chromium" false .venv/bin/python -m playwright install chromium
         else
             skip_msg "Playwright: offline, skipping download"
@@ -217,7 +299,7 @@ else
 fi
 if .venv/bin/python -c "import camoufox" 2>/dev/null; then
     if $FORCE_BROWSERS || [ ! -f ~/.cache/camoufox/version.json ]; then
-        if _net_ok; then
+        if $NET_OK; then
             run_step "Camoufox browser" false .venv/bin/python -m camoufox fetch
         else
             skip_msg "Camoufox: offline, skipping download (run 'camoufox fetch' later)"
@@ -231,17 +313,17 @@ fi
 
 header "7. Fix .pth for flat-layout packages"
 SITE_PKGS=$(echo .venv/lib/python*/site-packages)
-if .venv/bin/python -c "import tools" 2>/dev/null || [ -f "$SITE_PKGS/tools.pth" ]; then
-    # Only write when needed; never mass-delete __editable__ pths (that undoes pip editable installs).
-    if ! .venv/bin/python -c "import tools" 2>/dev/null; then
-        echo "$(pwd)" > "$SITE_PKGS/tools.pth"
-        summary "tools.pth written"
-    else
-        summary "imports OK, .pth untouched"
-    fi
+# Probe a real installed package (there is no `tools` module — repo root
+# holds acewriter/, doctools/, ...). Never mass-delete __editable__ pths.
+if .venv/bin/python -c "import acewriter" 2>/dev/null; then
+    summary "imports OK, .pth untouched"
 else
     echo "$(pwd)" > "$SITE_PKGS/tools.pth"
-    summary "tools.pth written"
+    if .venv/bin/python -c "import acewriter" 2>/dev/null; then
+        summary "tools.pth written, imports fixed"
+    else
+        record_failure "import acewriter failed" "run '.venv/bin/python -m pip install -r requirements.txt -v'"
+    fi
 fi
 
 header "8. Symlink entry points to ~/.local/bin"
@@ -295,7 +377,9 @@ fi
 header "10. Doctor (advisory)"
 if [ -x .venv/bin/acewriter ] || command -v acewriter >/dev/null 2>&1; then
     # Never fails the run — just surfaces camoufox/cookie/DNS state.
-    (.venv/bin/acewriter auth doctor 2>/dev/null || acewriter auth doctor 2>/dev/null) || \
+    # NOTE: no 2>/dev/null here — acewriter's Rich console writes to stderr,
+    # so suppressing it would hide the whole report.
+    (.venv/bin/acewriter auth doctor 2>&1 || acewriter auth doctor 2>&1) || \
         info "doctor skipped (acewriter not runnable yet)"
 else
     info "doctor skipped (acewriter not installed yet)"
